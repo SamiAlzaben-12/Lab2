@@ -1,1 +1,70 @@
+#include "mbed.h"
+#include "arm_book_lib.h"
 
+const int passcode[4] = {0,1,2,3};
+
+int main() {
+    DigitalIn  b[6] = {D2,D3,D4,D5,D6,D7};
+    DigitalOut alarm(LED1), error(LED3), block(LED2);
+
+    for(int i=0;i<6;i++) b[i].mode(PullDown);
+
+    int code[4], pos=0, fails=0;
+    bool warn=false, lock=false;
+    Timer t;
+
+    while(1) {
+        if(fails >= 5) {
+            block = 1;
+            ThisThread::sleep_for(100ms);
+            continue;
+        }
+
+        if(lock) {
+            block = 1;
+            auto ms = t.elapsed_time().count()/1000;
+            error = (ms%1000 < 300) ? 1 : 0;
+            if(ms >= 60000) { lock=false; error=0; block=0; t.stop(); t.reset(); }
+            ThisThread::sleep_for(100ms);
+            continue;
+        }
+
+        if(warn) {
+            auto ms = t.elapsed_time().count()/1000;
+            error = (ms/500)%2;
+            if(ms >= 30000) { warn=false; error=0; t.stop(); t.reset(); }
+            ThisThread::sleep_for(100ms);
+            continue;
+        }
+
+        bool pressed = false;
+        for(int i=0; i<6; i++) {
+            if(b[i]) {
+                pressed = true;
+                code[pos++] = i;
+                while(b[i]) ThisThread::sleep_for(10ms);
+
+                if(pos == 4) {
+                    bool good = true;
+                    for(int j=0; j<4; j++) if(code[j] != passcode[j]) good=false;
+
+                    if(good) {
+                        alarm = 1;
+                        fails = 0;
+                        error = 0;
+                    } else {
+                        fails++;
+                        error = 1;
+                        if(fails == 3) { warn=true; t.reset(); t.start(); }
+                        if(fails == 4) { lock=true; t.reset(); t.start(); }
+                    }
+                    pos = 0;
+                }
+                break;
+            }
+        }
+
+        alarm = alarm;  // keep state
+        if(!pressed) ThisThread::sleep_for(20ms);
+    }
+}
