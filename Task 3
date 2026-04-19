@@ -12,6 +12,7 @@ int main() {
     int code[4], pos=0, fails=0;
     bool warn=false, lock=false;
     Timer t;
+    Timer blinkTimer;  // separate timer just for blinking
 
     while(1) {
         if(fails >= 5) {
@@ -20,20 +21,49 @@ int main() {
             continue;
         }
 
+        // LOCKDOWN — alarm stays ON, error blinks, lasts 1 minute
         if(lock) {
-            block = 1;
-            auto ms = t.elapsed_time().count()/1000;
-            error = (ms%1000 < 300) ? 1 : 0;
-            if(ms >= 60000) { lock=false; error=0; block=0; t.stop(); t.reset(); }
-            ThisThread::sleep_for(100ms);
+            alarm = 1;  // stays on continuously
+            block = 0;
+
+            // Blink error LED every 300ms using blinkTimer
+            if(blinkTimer.elapsed_time() >= 300ms) {
+                error = !error;
+                blinkTimer.reset();
+            }
+
+            // End lockdown after 60 seconds
+            if(t.elapsed_time() >= 60s) {
+                lock  = false;
+                error = 0;
+                alarm = 0;
+                t.stop();
+                t.reset();
+                blinkTimer.stop();
+                blinkTimer.reset();
+            }
+
+            ThisThread::sleep_for(10ms);
             continue;
         }
 
+        // WARNING — error blinks slowly for 30 seconds
         if(warn) {
-            auto ms = t.elapsed_time().count()/1000;
-            error = (ms/500)%2;
-            if(ms >= 30000) { warn=false; error=0; t.stop(); t.reset(); }
-            ThisThread::sleep_for(100ms);
+            if(blinkTimer.elapsed_time() >= 500ms) {
+                error = !error;
+                blinkTimer.reset();
+            }
+
+            if(t.elapsed_time() >= 30s) {
+                warn  = false;
+                error = 0;
+                t.stop();
+                t.reset();
+                blinkTimer.stop();
+                blinkTimer.reset();
+            }
+
+            ThisThread::sleep_for(10ms);
             continue;
         }
 
@@ -55,8 +85,21 @@ int main() {
                     } else {
                         fails++;
                         error = 1;
-                        if(fails == 3) { warn=true; t.reset(); t.start(); }
-                        if(fails == 4) { lock=true; t.reset(); t.start(); }
+
+                        // 3rd wrong — start warning
+                        if(fails == 3) {
+                            warn = true;
+                            t.reset(); t.start();
+                            blinkTimer.reset(); blinkTimer.start();
+                        }
+
+                        // 4th wrong — start lockdown
+                        if(fails == 4) {
+                            lock  = true;
+                            error = 0;
+                            t.reset(); t.start();
+                            blinkTimer.reset(); blinkTimer.start();
+                        }
                     }
                     pos = 0;
                 }
@@ -64,7 +107,6 @@ int main() {
             }
         }
 
-        alarm = alarm;  // keep state
         if(!pressed) ThisThread::sleep_for(20ms);
     }
 }
