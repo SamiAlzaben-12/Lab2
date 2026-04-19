@@ -1,137 +1,137 @@
 #include "mbed.h"
 #include "arm_book_lib.h"
 
-// Define the correct passcode sequence
-const int passcode[4] = {0, 1, 2, 3}; 
-const int adminCode[4] = { 1, 1, 1, 1};   // ← NEW: admin code
+const int passcode[4]  = {0, 1, 2, 3};
+const int adminCode[4] = {1, 1, 1, 1};
 
 int main()
 {
-    // Define the 6 tactile switches (pins may vary based on your board)
-    DigitalIn buttons[6] = { D2, D3, D4, D5, D6, D7 };
+    DigitalIn buttons[6] = {D2, D3, D4, D5, D6, D7};
 
-    // Outputs
     DigitalOut alarmLed(LED1);
     DigitalOut incorrectCodeLed(LED3);
     DigitalOut systemBlockedLed(LED2);
 
-    // Initialization
-    for(int i=0; i<6; i++) buttons[i].mode(PullDown);
-    
-    int enteredCode[4];
-    int currentDigit = 0;
-    int attempts = 0;
-    bool alarmState = OFF; 
+    for(int i = 0; i < 6; i++) buttons[i].mode(PullDown);
 
-    bool inWarningMode = false;
-    bool inLockdownMode = false;
+    int  enteredCode[4];
+    int  currentDigit    = 0;
+    int  attempts        = 0;
+    bool alarmState      = OFF;
+    bool inWarningMode   = false;
+    bool inLockdownMode  = false;
+    int  lockdownCounter = 0;
+
     Timer warningTimer;
-
-    // ────────────────────────────────────────────────
-    // NEW: counter of how many times lockdown was triggered
-    int lockdownCounter = 0;
-    // ────────────────────────────────────────────────
+    Timer blinkTimer;
 
     while (true) {
-        if (attempts >= 5) {
-            systemBlockedLed = ON;
-            continue; // Lock the system
-        }
 
-        // Handle lockdown mode (60 seconds)
+        // LOCKDOWN MODE
         if (inLockdownMode) {
             systemBlockedLed = ON;
-            int ms = warningTimer.elapsed_time().count() / 1000;
-            incorrectCodeLed = (ms % 1000 < 300) ? ON : OFF;
+            alarmLed         = ON;
 
-            // During lockdown: allow admin code entry to exit lockdown
+            // incorrectCodeLed blinks every 300ms
+            if (blinkTimer.elapsed_time() >= 300ms) {
+                incorrectCodeLed = !incorrectCodeLed;
+                blinkTimer.reset();
+            }
+
+            // Read admin code during lockdown
             for (int i = 0; i < 6; i++) {
                 if (buttons[i]) {
                     enteredCode[currentDigit] = i;
                     currentDigit++;
-                    
-                    while(buttons[i]) { ThisThread::sleep_for(10ms); }
+                    while(buttons[i]) ThisThread::sleep_for(10ms);
 
                     if (currentDigit == 4) {
                         bool isAdmin = true;
-                        for(int j=0; j<4; j++) {
+                        for(int j = 0; j < 4; j++) {
                             if(enteredCode[j] != adminCode[j]) {
                                 isAdmin = false;
                                 break;
                             }
                         }
-
                         if (isAdmin) {
-                            inLockdownMode = false;
+                            inLockdownMode   = false;
                             incorrectCodeLed = OFF;
                             systemBlockedLed = OFF;
+                            alarmLed         = OFF;
+                            alarmState       = OFF;
+                            attempts         = 0;  // reset on admin override
+                            currentDigit     = 0;
                             warningTimer.stop();
                             warningTimer.reset();
-                            attempts = 0;               // reset failed attempts count
-                            currentDigit = 0;
-                            alarmState = OFF;           // ← CHANGE: reset alarm state → system returns to normal
-                            // Optional: short visual feedback that admin override was accepted
-                            alarmLed = ON; ThisThread::sleep_for(200ms); alarmLed = alarmState;
+                            blinkTimer.stop();
+                            blinkTimer.reset();
                         } else {
                             currentDigit = 0;
                         }
                     }
-                    break;  // only one button at a time
+                    break;
                 }
             }
 
-            if (ms >= 60000) {
-                inLockdownMode = false;
+            // Lockdown ends after 60 seconds
+            if (warningTimer.elapsed_time() >= 60s) {
+                inLockdownMode   = false;
                 incorrectCodeLed = OFF;
                 systemBlockedLed = OFF;
+                alarmLed         = OFF;
+                alarmState       = OFF;
+                attempts         = 0; //reset attempts so system works normally again
+                currentDigit     = 0; //reset digit buffer too
                 warningTimer.stop();
                 warningTimer.reset();
+                blinkTimer.stop();
+                blinkTimer.reset();
             }
-            ThisThread::sleep_for(100ms);
+
+            ThisThread::sleep_for(10ms);
             continue;
         }
 
-        // Handle warning mode (30 seconds slow blink)
+        // WARNING MODE
         if (inWarningMode) {
-            int ms = warningTimer.elapsed_time().count() / 1000;
-            incorrectCodeLed = (ms / 500) % 2;
-            if (ms >= 30000) {
-                inWarningMode = false;
+            if (blinkTimer.elapsed_time() >= 500ms) {
+                incorrectCodeLed = !incorrectCodeLed;
+                blinkTimer.reset();
+            }
+            if (warningTimer.elapsed_time() >= 30s) {
+                inWarningMode    = false;
                 incorrectCodeLed = OFF;
                 warningTimer.stop();
                 warningTimer.reset();
+                blinkTimer.stop();
+                blinkTimer.reset();
             }
-            ThisThread::sleep_for(100ms);
+            ThisThread::sleep_for(10ms);
             continue;
         }
 
-        // ────────────────────────────────────────────────────────────────
-        // NEW: simple visual indication of lockdown events (binary)
-        // LED1 = bit 0, LED3 = bit 1  → shows 0,1,2,3 lockdowns
-        // Only shown when system is idle (no alarm, no warning, no lockdown)
+        // EVENT COUNTER — binary display on LED1 and LED3 when idle
         if (!alarmState && !inWarningMode && !inLockdownMode) {
-            alarmLed = (lockdownCounter & 1) ? ON : OFF;
+            alarmLed         = (lockdownCounter & 1) ? ON : OFF;
             incorrectCodeLed = (lockdownCounter & 2) ? ON : OFF;
         }
-        // ────────────────────────────────────────────────────────────────
 
-        // Normal mode - regular code entry
+        // NORMAL CODE ENTRY
         for (int i = 0; i < 6; i++) {
             if (buttons[i]) {
                 enteredCode[currentDigit] = i;
                 currentDigit++;
-                
-                while(buttons[i]) { ThisThread::sleep_for(10ms); } 
+                while(buttons[i]) ThisThread::sleep_for(10ms);
 
                 if (currentDigit == 4) {
                     bool match = true;
-                    for(int j=0; j<4; j++) {
+                    for(int j = 0; j < 4; j++) {
                         if(enteredCode[j] != passcode[j]) match = false;
                     }
 
                     if (match) {
-                        alarmState = ON;
-                        attempts = 0;
+                        alarmState       = ON;
+                        attempts         = 0;
                         incorrectCodeLed = OFF;
                     } else {
                         attempts++;
@@ -141,21 +141,24 @@ int main()
                             inWarningMode = true;
                             warningTimer.reset();
                             warningTimer.start();
+                            blinkTimer.reset();
+                            blinkTimer.start();
                         }
-                        else if (attempts == 4) {
+                        if (attempts == 4) {
                             inLockdownMode = true;
+                            lockdownCounter++;
                             warningTimer.reset();
                             warningTimer.start();
-                            lockdownCounter++;      // ← NEW: count every time lockdown is entered
+                            blinkTimer.reset();
+                            blinkTimer.start();
                         }
                     }
                     currentDigit = 0;
                 }
-
                 break;
             }
         }
-        
+
         alarmLed = alarmState;
         ThisThread::sleep_for(20ms);
     }
